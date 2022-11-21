@@ -921,14 +921,15 @@ func (d *Domain) integrateFiles(sf StaticFiles, txNumFrom, txNumTo uint64) {
 
 // [txFrom; txTo)
 func (d *Domain) prune(ctx context.Context, step uint64, txFrom, txTo, limit uint64, logEvery *time.Ticker) error {
-	// It is important to clean up tables in a specific order
-	// First keysTable, because it is the first one access in the `get` function, i.e. if the record is deleted from there, other tables will not be accessed
+	start := time.Now()
+	defer func() { log.Info("[snapshots] domain pruned", "name", d.filenameBase, "took", time.Since(start)) }()
+
 	keysCursor, err := d.tx.RwCursorDupSort(d.keysTable)
 	if err != nil {
 		return fmt.Errorf("%s keys cursor: %w", d.filenameBase, err)
 	}
 	defer keysCursor.Close()
-	var k, v []byte
+	var k, v, stepBytes []byte
 	keyMaxSteps := make(map[string]uint64)
 
 	for k, v, err = keysCursor.First(); err == nil && k != nil; k, v, err = keysCursor.Next() {
@@ -945,11 +946,16 @@ func (d *Domain) prune(ctx context.Context, step uint64, txFrom, txTo, limit uin
 		if maxS, seen := keyMaxSteps[string(k)]; !seen || s > maxS {
 			keyMaxSteps[string(k)] = s
 		}
+		if len(stepBytes) == 0 && step == s {
+			stepBytes = v
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("iterate of %s keys: %w", d.filenameBase, err)
 	}
 
+	// It is important to clean up tables in a specific order
+	// First keysTable, because it is the first one access in the `get` function, i.e. if the record is deleted from there, other tables will not be accessed
 	for k, v, err = keysCursor.First(); err == nil && k != nil; k, v, err = keysCursor.Next() {
 		select {
 		case <-logEvery.C:
@@ -958,19 +964,13 @@ func (d *Domain) prune(ctx context.Context, step uint64, txFrom, txTo, limit uin
 			log.Warn("[snapshots] prune domain cancelled", "name", d.filenameBase, "err", ctx.Err())
 			return err
 		default:
-		}
-
-		s := ^binary.BigEndian.Uint64(v)
-		if s == step {
-			if maxS := keyMaxSteps[string(k)]; maxS <= step {
-				continue
-			}
-			if err = keysCursor.DeleteCurrent(); err != nil {
-				return fmt.Errorf("clean up %s for [%x]=>[%x]: %w", d.filenameBase, k, v, err)
-			}
-
-			if bytes.HasPrefix(k, keyCommitmentState) {
-				fmt.Printf("domain prune key %x [s%d] txn=%d\n", string(k), s, ^binary.BigEndian.Uint64(v))
+			if bytes.Equal(stepBytes, v) {
+				if maxS := keyMaxSteps[string(k)]; maxS <= step {
+					continue
+				}
+				if err = keysCursor.DeleteCurrent(); err != nil {
+					return fmt.Errorf("clean up %s for [%x]=>[%x]: %w", d.filenameBase, k, v, err)
+				}
 			}
 		}
 	}
@@ -990,16 +990,14 @@ func (d *Domain) prune(ctx context.Context, step uint64, txFrom, txTo, limit uin
 			log.Warn("[snapshots] prune domain cancelled", "name", d.filenameBase, "err", ctx.Err())
 			return err
 		default:
-		}
-		s := ^binary.BigEndian.Uint64(k[len(k)-8:])
-		if s == step {
-			if maxS := keyMaxSteps[string(k[:len(k)-8])]; maxS <= step {
-				continue
+			if bytes.Equal(stepBytes, k[len(k)-8:]) {
+				if maxS := keyMaxSteps[string(k[len(k)-8:])]; maxS <= step {
+					continue
+				}
+				if err = valsCursor.DeleteCurrent(); err != nil {
+					return fmt.Errorf("clean up %s for [%x]: %w", d.filenameBase, k, err)
+				}
 			}
-			if err = valsCursor.DeleteCurrent(); err != nil {
-				return fmt.Errorf("clean up %s for [%x]: %w", d.filenameBase, k, err)
-			}
-			//fmt.Printf("domain prune value for %x (invs %x) [s%d]\n", string(k),k[len(k)-8):], s)
 		}
 	}
 	if err != nil {

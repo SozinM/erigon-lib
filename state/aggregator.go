@@ -254,8 +254,9 @@ func (a *Aggregator) aggregate(ctx context.Context, step uint64) error {
 	)
 	defer logEvery.Stop()
 
-	for _, d := range []*Domain{a.accounts, a.storage, a.code, a.commitment.Domain} {
+	for i, d := range []*Domain{a.accounts, a.storage, a.code, a.commitment.Domain} {
 		wg.Add(1)
+		started := time.Now()
 
 		collation, err := d.collate(ctx, step, txFrom, txTo, d.tx, logEvery)
 		if err != nil {
@@ -268,7 +269,7 @@ func (a *Aggregator) aggregate(ctx context.Context, step uint64) error {
 
 			defer func(t time.Time) {
 				log.Info("[snapshots] domain collate-build is done", "took", time.Since(t), "domain", d.filenameBase)
-			}(time.Now())
+			}(started)
 
 			sf, err := d.buildFiles(ctx, step, collation)
 			collation.Close()
@@ -281,6 +282,12 @@ func (a *Aggregator) aggregate(ctx context.Context, step uint64) error {
 			d.integrateFiles(sf, step*a.aggregationStep, (step+1)*a.aggregationStep)
 		}(&wg, d, collation)
 
+		_ = i
+		if i != 3 { // do not warmup commitment domain
+			if err := d.warmup(txFrom, d.aggregationStep/10, d.tx); err != nil {
+				return fmt.Errorf("warmup %q domain failed: %w", d.filenameBase, err)
+			}
+		}
 		if err := d.prune(ctx, step, txFrom, txTo, math.MaxUint64, logEvery); err != nil {
 			return err
 		}
@@ -289,6 +296,7 @@ func (a *Aggregator) aggregate(ctx context.Context, step uint64) error {
 	for _, d := range []*InvertedIndex{a.logTopics, a.logAddrs, a.tracesFrom, a.tracesTo} {
 		wg.Add(1)
 
+		started := time.Now()
 		collation, err := d.collate(ctx, step*a.aggregationStep, (step+1)*a.aggregationStep, d.tx, logEvery)
 		if err != nil {
 			return fmt.Errorf("index collation %q has failed: %w", d.filenameBase, err)
@@ -298,7 +306,7 @@ func (a *Aggregator) aggregate(ctx context.Context, step uint64) error {
 			defer wg.Done()
 			defer func(t time.Time) {
 				log.Info("[snapshots] index collate-build is done", "took", time.Since(t), "domain", d.filenameBase)
-			}(time.Now())
+			}(started)
 
 			sf, err := d.buildFiles(ctx, step, collation)
 			if err != nil {
