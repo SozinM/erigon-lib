@@ -70,7 +70,10 @@ func filesItemLess(i, j *filesItem) bool {
 }
 
 type DomainStats struct {
-	MergesCount    uint64
+	MergesCount       uint64
+	LastCollationTook time.Duration
+	LastPruneTook     time.Duration
+
 	HistoryQueries uint64
 	EfSearchTime   time.Duration
 	DataSize       uint64
@@ -646,6 +649,11 @@ func (c Collation) Close() {
 // and returns compressors, elias fano, and bitmaps
 // [txFrom; txTo)
 func (d *Domain) collate(ctx context.Context, step, txFrom, txTo uint64, roTx kv.Tx, logEvery *time.Ticker) (Collation, error) {
+	started := time.Now()
+	defer func() {
+		d.stats.LastCollationTook = time.Since(started)
+	}()
+
 	hCollation, err := d.History.collate(step, txFrom, txTo, roTx, logEvery)
 	if err != nil {
 		return Collation{}, err
@@ -922,7 +930,10 @@ func (d *Domain) integrateFiles(sf StaticFiles, txNumFrom, txNumTo uint64) {
 // [txFrom; txTo)
 func (d *Domain) prune(ctx context.Context, step uint64, txFrom, txTo, limit uint64, logEvery *time.Ticker) error {
 	start := time.Now()
-	defer func() { log.Info("[snapshots] domain pruned", "name", d.filenameBase, "took", time.Since(start)) }()
+	defer func() {
+		d.stats.LastPruneTook = time.Since(start)
+		log.Info("[snapshots] domain pruned", "name", d.filenameBase, "took", time.Since(start))
+	}()
 
 	keysCursor, err := d.tx.RwCursorDupSort(d.keysTable)
 	if err != nil {
