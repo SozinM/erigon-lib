@@ -70,9 +70,10 @@ func filesItemLess(i, j *filesItem) bool {
 }
 
 type DomainStats struct {
-	MergesCount       uint64
-	LastCollationTook time.Duration
-	LastPruneTook     time.Duration
+	MergesCount          uint64
+	LastCollationTook    time.Duration
+	LastPruneTook        time.Duration
+	LastFileBuildingTook time.Duration
 
 	HistoryQueries uint64
 	EfSearchTime   time.Duration
@@ -932,7 +933,6 @@ func (d *Domain) prune(ctx context.Context, step uint64, txFrom, txTo, limit uin
 	start := time.Now()
 	defer func() {
 		d.stats.LastPruneTook = time.Since(start)
-		log.Info("[snapshots] domain pruned", "name", d.filenameBase, "took", time.Since(start))
 	}()
 
 	keysCursor, err := d.tx.RwCursorDupSort(d.keysTable)
@@ -951,14 +951,13 @@ func (d *Domain) prune(ctx context.Context, step uint64, txFrom, txTo, limit uin
 			log.Warn("[snapshots] prune domain cancelled", "name", d.filenameBase, "err", ctx.Err())
 			return err
 		default:
-		}
-
-		s := ^binary.BigEndian.Uint64(v)
-		if maxS, seen := keyMaxSteps[string(k)]; !seen || s > maxS {
-			keyMaxSteps[string(k)] = s
-		}
-		if len(stepBytes) == 0 && step == s {
-			stepBytes = v
+			s := ^binary.BigEndian.Uint64(v)
+			if maxS, seen := keyMaxSteps[string(k)]; !seen || s > maxS {
+				keyMaxSteps[string(k)] = s
+			}
+			if len(stepBytes) == 0 && step == s {
+				stepBytes = common.Copy(v)
+			}
 		}
 	}
 	if err != nil {

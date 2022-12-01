@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/holiman/uint256"
 	"github.com/ledgerwatch/log/v3"
@@ -48,15 +49,34 @@ func TestAggregator_Merge(t *testing.T) {
 
 	defer agg.StartWrites().FinishWrites()
 	txs := uint64(10000)
+	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	// keys are encodings of numbers 1..31
 	// each key changes value on every txNum which is multiple of the key
 	var maxWrite, otherMaxWrite uint64
 	for txNum := uint64(1); txNum <= txs; txNum++ {
 		agg.SetTxNum(txNum)
+
+		addr, loc := make([]byte, length.Addr), make([]byte, length.Hash)
+
+		n, err := rnd.Read(addr)
+		require.NoError(t, err)
+		require.EqualValues(t, length.Addr, n)
+
+		n, err = rnd.Read(loc)
+		require.NoError(t, err)
+		require.EqualValues(t, length.Hash, n)
+		//keys[txNum-1] = append(addr, loc...)
+
+		buf := EncodeAccountBytes(1, uint256.NewInt(0), nil, 0)
+		err = agg.UpdateAccountData(addr, buf)
+		require.NoError(t, err)
+
+		err = agg.WriteAccountStorage(addr, loc, []byte{addr[0], loc[0]})
+		require.NoError(t, err)
+
 		var v [8]byte
 		binary.BigEndian.PutUint64(v[:], txNum)
-		var err error
 		if txNum%135 == 0 {
 			err = agg.UpdateCommitmentData([]byte("otherroothash"), v[:])
 			otherMaxWrite = txNum
@@ -112,28 +132,13 @@ func TestAggregator_RestartOnDatadir(t *testing.T) {
 		if tx != nil {
 			tx.Rollback()
 		}
-		if agg != nil {
-			agg.Close()
-		}
 	}()
 	agg.SetTx(tx)
 	defer agg.StartWrites().FinishWrites()
 
 	var latestCommitTxNum uint64
-	commit := func(txn uint64) error {
-		err = agg.Flush()
-		require.NoError(t, err)
-		err = tx.Commit()
-		require.NoError(t, err)
-		tx, err = db.BeginRw(context.Background())
-		require.NoError(t, err)
-		t.Logf("commit to db txn=%d", txn)
 
-		atomic.StoreUint64(&latestCommitTxNum, txn)
-		agg.SetTx(tx)
-		return nil
-	}
-	agg.SetCommitFn(commit)
+	rnd := rand.New(rand.NewSource(time.Now().Unix()))
 
 	txs := (aggStep / 2) * 19
 	t.Logf("step=%d tx_count=%d", aggStep, txs)
@@ -145,7 +150,25 @@ func TestAggregator_RestartOnDatadir(t *testing.T) {
 		agg.SetTxNum(txNum)
 		binary.BigEndian.PutUint64(aux[:], txNum)
 
+		addr, loc := make([]byte, length.Addr), make([]byte, length.Hash)
+		n, err := rnd.Read(addr)
+		require.NoError(t, err)
+		require.EqualValues(t, length.Addr, n)
+
+		n, err = rnd.Read(loc)
+		require.NoError(t, err)
+		require.EqualValues(t, length.Hash, n)
+		//keys[txNum-1] = append(addr, loc...)
+
+		buf := EncodeAccountBytes(1, uint256.NewInt(0), nil, 0)
+		err = agg.UpdateAccountData(addr, buf)
+		require.NoError(t, err)
+
+		err = agg.WriteAccountStorage(addr, loc, []byte{addr[0], loc[0]})
+		require.NoError(t, err)
+
 		err = agg.UpdateCommitmentData([]byte("key"), aux[:])
+		require.NoError(t, err)
 		maxWrite = txNum
 
 		require.NoError(t, agg.FinishTx())
@@ -154,8 +177,7 @@ func TestAggregator_RestartOnDatadir(t *testing.T) {
 	require.NoError(t, err)
 	err = tx.Commit()
 	require.NoError(t, err)
-	agg.Close()
-	tx, agg = nil, nil
+	tx = nil
 
 	// Start another aggregator on same datadir
 	anotherAgg, err := NewAggregator(path, path, aggStep)
@@ -205,26 +227,9 @@ func TestAggregator_RestartOnFiles(t *testing.T) {
 		if tx != nil {
 			tx.Rollback()
 		}
-		if agg != nil {
-			agg.Close()
-		}
 	}()
 	agg.SetTx(tx)
 	defer agg.StartWrites().FinishWrites()
-
-	var latestCommitTxNum uint64
-	commit := func(txn uint64) error {
-		err = tx.Commit()
-		require.NoError(t, err)
-		tx, err = db.BeginRw(context.Background())
-		require.NoError(t, err)
-		t.Logf("commit to db txn=%d", txn)
-
-		atomic.StoreUint64(&latestCommitTxNum, txn)
-		agg.SetTx(tx)
-		return nil
-	}
-	agg.SetCommitFn(commit)
 
 	txs := aggStep * 5
 	t.Logf("step=%d tx_count=%d", aggStep, txs)
@@ -258,10 +263,10 @@ func TestAggregator_RestartOnFiles(t *testing.T) {
 	}
 
 	err = tx.Commit()
+	require.NoError(t, err)
 	tx = nil
 	db.Close()
 	db = nil
-	agg.Close()
 	agg = nil
 
 	require.NoError(t, os.RemoveAll(filepath.Join(path, "db4")))
@@ -313,7 +318,7 @@ func TestAggregator_RestartOnFiles(t *testing.T) {
 }
 
 func TestAggregator_ReplaceCommittedKeys(t *testing.T) {
-	aggStep := uint64(1000)
+	aggStep := uint64(10000)
 
 	path, db, agg := testDbAndAggregator(t, 0, aggStep)
 	defer db.Close()
@@ -324,9 +329,6 @@ func TestAggregator_ReplaceCommittedKeys(t *testing.T) {
 	defer func() {
 		if tx != nil {
 			tx.Rollback()
-		}
-		if agg != nil {
-			agg.Close()
 		}
 	}()
 	agg.SetTx(tx)
@@ -344,9 +346,9 @@ func TestAggregator_ReplaceCommittedKeys(t *testing.T) {
 		agg.SetTx(tx)
 		return nil
 	}
-	agg.SetCommitFn(commit)
 
-	txs := aggStep / 2 * 20
+	roots := agg.AggregatedRoots()
+	txs := aggStep / 2 * 50
 	t.Logf("step=%d tx_count=%d", aggStep, txs)
 
 	rnd := rand.New(rand.NewSource(0))
@@ -374,6 +376,12 @@ func TestAggregator_ReplaceCommittedKeys(t *testing.T) {
 
 		err = agg.FinishTx()
 		require.NoError(t, err)
+		select {
+		case <-roots:
+			require.NoError(t, commit(txNum))
+		default:
+			continue
+		}
 	}
 
 	half := txs / 2
@@ -403,9 +411,6 @@ func TestAggregator_ReplaceCommittedKeys(t *testing.T) {
 		require.EqualValues(t, key[length.Addr], storedV[1])
 	}
 	require.NoError(t, err)
-
-	agg.Close()
-	agg = nil
 }
 
 func Test_EncodeCommitmentState(t *testing.T) {

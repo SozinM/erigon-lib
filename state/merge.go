@@ -186,7 +186,6 @@ func (d *Domain) mergeRangesUpTo(ctx context.Context, maxTxNum, maxSpan uint64, 
 			}
 		}()
 
-		//defer func(t time.Time) { log.Info("[snapshots] merge", "took", time.Since(t)) }(time.Now())
 		d.integrateMergedFiles(sfr.valuesFiles, sfr.indexFiles, sfr.historyFiles, mf.values, mf.index, mf.history)
 
 		if err := d.deleteFiles(sfr.valuesFiles, sfr.indexFiles, sfr.historyFiles); err != nil {
@@ -225,11 +224,10 @@ func (ii *InvertedIndex) findMergeRange(maxEndTxNum, maxSpan uint64) (bool, uint
 	return minFound, startTxNum, endTxNum
 }
 
-// nolint
 func (ii *InvertedIndex) mergeRangesUpTo(ctx context.Context, maxTxNum, maxSpan uint64, workers int) (err error) {
 	closeAll := true
 	for updated, startTx, endTx := ii.findMergeRange(maxSpan, maxTxNum); updated; updated, startTx, endTx = ii.findMergeRange(maxTxNum, maxSpan) {
-		staticFiles, startJ := ii.staticFilesInRange(startTx, endTx)
+		staticFiles, _ := ii.staticFilesInRange(startTx, endTx)
 		defer func() {
 			if closeAll {
 				for _, i := range staticFiles {
@@ -238,7 +236,6 @@ func (ii *InvertedIndex) mergeRangesUpTo(ctx context.Context, maxTxNum, maxSpan 
 				}
 			}
 		}()
-		_ = startJ
 
 		mergedIndex, err := ii.mergeFiles(ctx, staticFiles, startTx, endTx, workers)
 		if err != nil {
@@ -251,14 +248,10 @@ func (ii *InvertedIndex) mergeRangesUpTo(ctx context.Context, maxTxNum, maxSpan 
 			}
 		}()
 
-		//defer func(t time.Time) { log.Info("[snapshots] merge", "took", time.Since(t)) }(time.Now())
 		ii.integrateMergedFiles(staticFiles, mergedIndex)
-
 		if err := ii.deleteFiles(staticFiles); err != nil {
 			return err
 		}
-
-		log.Info(fmt.Sprintf("domain files mergedRange[%d, %d) name=%s span=%d \n", startTx, endTx, ii.filenameBase, maxSpan))
 	}
 	closeAll = false
 	return nil
@@ -430,16 +423,12 @@ func (d *Domain) mergeFiles(ctx context.Context, valuesFiles, indexFiles, histor
 		return
 	}
 	var comp *compress.Compressor
-	//var decomp *compress.Decompressor
 	var closeItem bool = true
 	defer func() {
 		if closeItem {
 			if comp != nil {
 				comp.Close()
 			}
-			//if decomp != nil {
-			//	decomp.Close()
-			//}
 			if indexIn != nil {
 				if indexIn.decompressor != nil {
 					indexIn.decompressor.Close()
