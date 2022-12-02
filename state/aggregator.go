@@ -975,10 +975,13 @@ func (a *Aggregator) Flush() error {
 }
 
 type FilesStats struct {
-	TxCount    uint64
-	FilesCount uint64
-	IdxSize    uint64
-	DataSize   uint64
+	HistoryReads uint64
+	TotalReads   uint64
+	IdxAccess    time.Duration
+	TxCount      uint64
+	FilesCount   uint64
+	IdxSize      uint64
+	DataSize     uint64
 }
 
 func (a *Aggregator) Stats() FilesStats {
@@ -987,6 +990,9 @@ func (a *Aggregator) Stats() FilesStats {
 	res.IdxSize = stat.IndexSize
 	res.DataSize = stat.DataSize
 	res.FilesCount = stat.FilesCount
+	res.HistoryReads = stat.HistoryQueries
+	res.TotalReads = stat.TotalQueries
+	res.IdxAccess = stat.EfSearchTime
 	return res
 }
 

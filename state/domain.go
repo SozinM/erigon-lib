@@ -76,6 +76,7 @@ type DomainStats struct {
 	LastFileBuildingTook time.Duration
 
 	HistoryQueries uint64
+	TotalQueries   uint64
 	EfSearchTime   time.Duration
 	DataSize       uint64
 	IndexSize      uint64
@@ -84,6 +85,7 @@ type DomainStats struct {
 
 func (ds *DomainStats) Accumulate(other DomainStats) {
 	ds.HistoryQueries += other.HistoryQueries
+	ds.TotalQueries += other.TotalQueries
 	ds.EfSearchTime += other.EfSearchTime
 	ds.IndexSize += other.IndexSize
 	ds.DataSize += other.DataSize
@@ -296,6 +298,8 @@ func (d *Domain) Close() {
 
 func (dc *DomainContext) get(key []byte, fromTxNum uint64, roTx kv.Tx) ([]byte, bool, error) {
 	//var invertedStep [8]byte
+	atomic.AddUint64(&dc.d.stats.TotalQueries, 1)
+
 	invertedStep := dc.numBuf
 	binary.BigEndian.PutUint64(invertedStep[:], ^(fromTxNum / dc.d.aggregationStep))
 	keyCursor, err := roTx.CursorDupSort(dc.d.keysTable)
@@ -534,6 +538,8 @@ func (dc *DomainContext) IteratePrefix(prefix []byte, it func(k, v []byte)) erro
 	if len(prefix) != dc.d.prefixLen {
 		return fmt.Errorf("wrong prefix length, this %s domain supports prefixLen %d, given [%x]", dc.d.filenameBase, dc.d.prefixLen, prefix)
 	}
+	atomic.AddUint64(&dc.d.stats.HistoryQueries, 1)
+
 	var cp CursorHeap
 	heap.Init(&cp)
 	var k, v []byte
@@ -1095,6 +1101,8 @@ func (dc *DomainContext) readFromFiles(filekey []byte, fromTxNum uint64) ([]byte
 // historyBeforeTxNum searches history for a value of specified key before txNum
 // second return value is true if the value is found in the history (even if it is nil)
 func (dc *DomainContext) historyBeforeTxNum(key []byte, txNum uint64, roTx kv.Tx) ([]byte, bool, error) {
+	atomic.AddUint64(&dc.d.stats.HistoryQueries, 1)
+
 	var search ctxItem
 	search.startTxNum = txNum
 	search.endTxNum = txNum
