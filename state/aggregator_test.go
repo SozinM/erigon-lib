@@ -425,3 +425,11 @@ func Test_EncodeCommitmentState(t *testing.T) {
 	require.EqualValues(t, cs.txNum, dec.txNum)
 	require.EqualValues(t, cs.trieState, dec.trieState)
 }
+
+func Test_BtreeIndex(t *testing.T) {
+	bt := newBtAlloc3(400, 8)
+
+	bt.walk()
+
+	_ = bt
+}
