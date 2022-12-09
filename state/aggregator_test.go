@@ -427,9 +427,18 @@ func Test_EncodeCommitmentState(t *testing.T) {
 }
 
 func Test_BtreeIndex(t *testing.T) {
-	bt := newBtAlloc3(400, 8)
+	bt := newBtAlloc(32, 4)
 
-	bt.walk()
+	bt.walkFillorder()
+	bt.init()
+	for {
+		c := bt.pick()
+		if c == 0 {
+			break
+		}
+		fmt.Printf("pick %d\n", c)
+
+	}
 
 	_ = bt
 }

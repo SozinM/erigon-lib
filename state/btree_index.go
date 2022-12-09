@@ -37,7 +37,8 @@ type page struct {
 type node struct {
 	key    []byte
 	pos    uint64
-	parent *node
+	val    uint64
+	parent uint64
 }
 
 type inode struct {
@@ -54,11 +55,13 @@ func isEven(n uint64) bool {
 }
 
 type btAlloc struct {
-	vx       []uint64
-	vertices []uint64
-	sons     [][]uint64
-	d        uint64
-	M        uint64
+	vx   []uint64
+	bros []uint64
+	pos  []int
+	pl   uint64
+	sons [][]uint64
+	d    uint64
+	M    uint64
 }
 
 func logBase(n, base uint64) uint64 {
@@ -78,7 +81,7 @@ func max64(a, b uint64) uint64 {
 	return b
 }
 
-func newBtAlloc3(k, M uint64) *btAlloc {
+func newBtAlloc(k, M uint64) *btAlloc {
 	var d uint64
 	ks := k + 1
 	d = logBase(ks, M)
@@ -88,6 +91,7 @@ func newBtAlloc3(k, M uint64) *btAlloc {
 	a := &btAlloc{
 		vx:   make([]uint64, d+1),
 		sons: make([][]uint64, d+1),
+		bros: make([]uint64, d),
 		M:    M, d: d,
 	}
 	a.vx[0] = 1
@@ -109,7 +113,6 @@ func newBtAlloc3(k, M uint64) *btAlloc {
 
 	pnv := uint64(0)
 	for l := a.d - 1; l > 0; l-- {
-
 		s := nnc(a.vx[l+1])
 		lnc := uint64(0)
 		left := a.vx[l+1] % M
@@ -139,93 +142,97 @@ func newBtAlloc3(k, M uint64) *btAlloc {
 	}
 	a.sons[0] = []uint64{1, pnv}
 
-	for i, v := range a.vx {
-		fmt.Printf("L%d=%v; vx=%d \n", i, a.sons[i], v)
+	for i, v := range a.sons {
+		fmt.Printf("L%d=%v\n", i, v)
 	}
 
 	return a
 }
 
-func newBtAlloc2(k, M uint64) *btAlloc {
-	var d uint64
-	ks := k + 1
-	d = logBase(ks, M)
-	m := M >> 1
-
-	fmt.Printf("k=%d d=%d, M=%d m=%d\n", k, d, M, m)
-	a := &btAlloc{
-		vx:   make([]uint64, d+1),
-		sons: make([][]uint64, d+1),
-		M:    M, d: d,
+func (a *btAlloc) init() {
+	a.bros = make([]uint64, a.d)
+	a.pos = make([]int, a.d)
+	a.pl = a.d - 1
+	for i := 0; i < int(a.d); i++ {
+		a.bros[i] = a.sons[i][1]
+		a.pos[i] = 1
 	}
-	a.vx[0] = 1
-	a.vx[d] = ks
-
-	for i := a.d - 1; i > 0; i-- {
-		//nnc := uint64(math.Ceil(float64(a.vx[i+1]) / float64(M))+1)
-		//nvc := uint64(math.Floor(float64(a.vx[i+1]) / float64(m))-1)
-		nnc := a.vx[i+1] / M
-		nvc := a.vx[i+1] / m
-		//bvc := a.vx[i+1] / (m + (m >> 1))
-		_, _ = nvc, nnc
-		a.vx[i] = min64(uint64(math.Pow(float64(M), float64(i))), nnc)
-	}
-
-	var vx uint64 //vertexTotal
-	for l := uint64(0); l < uint64(a.d); l++ {
-		//fmt.Printf("s' %d\n", a.vx[l+1]/a.vx[l]-1)
-		s := uint64(math.Floor(float64(a.vx[l+1])/float64(a.vx[l]))) - 1
-		//s := (a.vx[l+1] / a.vx[l]) - 1
-		r := a.vx[l] - (a.vx[l+1] % a.vx[l])
-		vx += s * r
-		a.sons[l] = []uint64{r, s}
-		fmt.Printf("s=%d r=%d layer_total=%d nodes=%d\n", s, r, r*s, vx)
-	}
-	dx := a.vx[a.d] - vx
-	s := uint64(math.Floor(float64(dx)/float64(M))) - 1
-	a.sons[a.d] = []uint64{s, M}
-	fmt.Printf("s=%d r=%d layer_total=%d nodes=%d\n", M, s, dx, vx+dx)
-
-	for i, v := range a.vx {
-		fmt.Printf("L%d=%v; vx=%d \n", i, a.sons[i], v)
-	}
-
-	return a
 }
 
-func (a *btAlloc) walk() {
-	var totalNodes uint64
-	f, err := os.Create("walk.csv")
-	if err != nil {
-		panic(err)
-	}
-	fmt.Fprintf(f, "r, s\n")
-	for i, s := range a.sons {
-		_ = i
-		if len(s) == 0 {
-			continue
-		}
-		for j := 0; j < len(s); j += 2 {
-			sc := s[j] * s[j+1]
-			//totalNodes += s[j]
-			for j := uint64(0); j < sc; j++ {
-				totalNodes++
+//wip
+func (a *btAlloc) pick() uint64 {
+	for {
+		if a.bros[a.pl] == 0 {
+			a.pos[a.pl] += 2
+			if len(a.sons[a.pl]) > a.pos[a.pl] {
+				a.pos[a.pl] = -1 // кончились ноды на уровне
+				continue
 			}
-
+			a.bros[a.pl] = a.sons[a.pl][a.pos[a.pl]]
+			a.pl--
+			return 1
+			//break
 		}
-	}
-	fmt.Printf("total=%d\n", totalNodes)
 
-	var vx uint64
-	for i, s := range a.sons {
-		for j := 0; j < len(s); j += 2 {
-			vx += s[j] * s[j+1]
+		b := a.bros[a.pl]
+		a.bros[a.pl] = 0
+		return b
+	}
+	return 0
+}
+
+func (a *btAlloc) walkFillorder() {
+	stack := make([]string, 0)
+	var sp uint64
+	p := -1  // parent ptr
+	bl := -1 // bros left
+
+	for l := len(a.sons) - 2; l >= 0; {
+		for i := 0; i < len(a.sons[l]); i += 2 {
+			nodes, ccount := a.sons[l][i], a.sons[l][i+1]
+			for n := uint64(0); n < nodes; n++ {
+				for j := uint64(0); j < ccount; j++ {
+					stack = append(stack, fmt.Sprintf("L%d x%2d", l, sp))
+					fmt.Printf("%s\n", stack[sp])
+					sp++
+				}
+				stack = append(stack, fmt.Sprintf("L%d c%2d x%2d", l-1, ccount, sp))
+				fmt.Printf("%s\n", stack[sp])
+				sp++
+
+				if l == 0 {
+					continue
+				}
+				if p < 0 && bl < 0 {
+					p = 0 // even root should have this item
+					bros := a.sons[l-1][p+1]
+					bl = int(bros)
+				}
+				bl--
+				// ненадежный отсчет оставшихся братишек
+				if bl != int(a.sons[l-1][p+1])-1 && bl > 0 {
+					continue // skip previously marked parent
+				}
+				if bl <= 0 {
+					p += 2
+					if p >= len(a.sons[l-1]) {
+						break
+					}
+					bros := a.sons[l-1][p+1]
+					bl = int(bros)
+				}
+				stack = append(stack, fmt.Sprintf("L%d p%2d x%2d", l-1, p, sp))
+				fmt.Printf("%s\n", stack[sp])
+				sp++
+
+			}
 		}
-		fmt.Printf("w%d=%v; vx=%d \n", i, s, vx)
+		l -= 2 // parent row already filled by row below
 	}
 
-	f.Sync()
-	f.Close()
+	//for _, s := range stack {
+	//	fmt.Printf("%s\n", s)
+	//}
 }
 
 func OpenBtreeIndex(indexPath string) (*BtIndex, error) {
